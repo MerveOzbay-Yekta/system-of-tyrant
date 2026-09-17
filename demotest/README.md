@@ -103,10 +103,12 @@ Hiçbiri zorunlu değildir; hepsinin makul varsayılanı vardır.
 | `REDIS_HOST` | `127.0.0.1` | Redis adresi |
 | `REDIS_PORT` | `6379` | Redis portu |
 | `REDIS_URL` | — | Tam bağlantı adresi (`redis://...`), diğerlerini geçersiz kılar |
+| `TARGET_URL` | `http://localhost:$PORT` | `npm run sim` komutunun yük basacağı adres |
 
 ```bash
-# 3000 portu meşgulse:
+# 3000 portu meşgulse (sim de aynı değişkeni okur):
 PORT=3001 npm start
+PORT=3001 npm run sim
 
 # Redis başka makinede:
 REDIS_URL=redis://192.168.1.50:6379 npm start
@@ -117,6 +119,14 @@ Windows PowerShell'de:
 ```powershell
 $env:PORT=3001; npm start
 ```
+
+### `npm install` sırasındaki güvenlik uyarısı
+
+`npm install` sonunda 3 adet "moderate" uyarı görebilirsiniz. Bunların kaynağı
+`autocannon` paketinin alt bağımlılığı olan `uuid`'dir. `autocannon` yalnızca
+bir **devDependency**'dir ve sadece yük simülasyonunda kullanılır — sunucunun
+çalışma yolunda yer almaz. `npm audit fix --force` komutu autocannon'u 2.0.1'e
+düşürerek `simulate.js`'i bozar; **çalıştırmayın**.
 
 ---
 

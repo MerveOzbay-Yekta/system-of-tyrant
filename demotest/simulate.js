@@ -23,6 +23,10 @@ const HEDEF_RPS = 450;  // saniyede hedeflenen istek sayısı (400-500 bandını
 const SURE_SN = 30;     // testin süresi
 const ARAC_SAYISI = 500; // filo büyüklüğü; ekranda bu kadar satır oluşur
 
+// Sunucu adresi sabit yazılmaz: PORT değiştirilerek başlatılan bir sunucuya da
+// yük basabilmek gerekir. Sunucuyla aynı ortam değişkenini kullanır.
+const HEDEF_URL = process.env.TARGET_URL || `http://localhost:${Number(process.env.PORT) || 3000}`;
+
 // Her istek için yeniden çağrılır -> her araç gerçekten hareket ediyormuş gibi
 // görünür. İstanbul/Eminönü civarında dar bir kutu içinde rastgele konum.
 function rastgeleGovde() {
@@ -36,12 +40,12 @@ function rastgeleGovde() {
 
 function runSimulation() {
     console.log(`🔥 Stabil Yük Testi Başlatılıyor (~${HEDEF_RPS} istek/sn, ${SURE_SN} sn)...`);
-    console.log('👉 Canlı akışı http://localhost:3000 adresinden izleyin.');
+    console.log(`👉 Canlı akışı ${HEDEF_URL} adresinden izleyin.`);
 
     const instance = autocannon({
         // `requests` dizisi kullanıldığında yol (path) orada belirtilir,
         // bu yüzden url yalnızca kök adresi taşır.
-        url: 'http://localhost:3000',
+        url: HEDEF_URL,
 
         // 100 -> 10. Hız zaten overallRate ile sabitlendiği için fazla bağlantı
         // işe yaramaz; dahası ÖLÇÜMÜ BOZAR. overallRate bağlantılara bölündüğü
