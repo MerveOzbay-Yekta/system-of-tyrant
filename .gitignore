@@ -3,3 +3,6 @@ npm-debug.log*
 .env
 .env.local
 .DS_Store
+
+# Calisma sirasinda alinan yedekler
+*.bak

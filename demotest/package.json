@@ -1,20 +1,32 @@
 {
   "name": "arac-takip-simulator",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Saniyede ~450 telemetri isteğini Redis üzerinden işleyip WebSocket ile canlı ekrana basan araç takip gateway'i ve yük simülatörü.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "sim": "node simulate.js",
+    "fix-redis": "node fix-redis.js"
   },
-  "keywords": [],
+  "keywords": [
+    "redis",
+    "websocket",
+    "telemetry",
+    "load-test",
+    "autocannon"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "express": "^5.2.1",
-    "ioredis": "^6.0.0"
+    "ioredis": "^6.0.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "autocannon": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  CANLI ARAÇ TAKİP EKRANI
+  ============================================================================
+
+  ESKİ HALİNDEKİ ASIL SORUN — DOM ŞİŞMESİ:
+  Eski kod her 200 ms'de şunu yapıyordu:
+        logDiv.innerHTML += htmlChunk;
+  `innerHTML +=` masum görünür ama aslında şu demektir:
+        1. Mevcut TÜM içeriği string'e çevir (serialize et)
+        2. Sonuna yeni parçayı ekle
+        3. TÜM string'i baştan HTML olarak parse et
+        4. Tüm alt ağacı yok edip yeniden kur
+  İçerik hiç silinmediği için bu string sürekli büyür. Saniyede 450 kayıtta
+  bir dakika sonra ~27.000 satırlık bir DOM'u saniyede 5 kez baştan kurmaya
+  çalışırsınız. Sekme birkaç saniye içinde donar.
+
+  YENİ YAKLAŞIM — SABİT SATIR, DEĞİŞEN HÜCRE:
+  Her araç için bir <tr> BİR KEZ oluşturulur ve `satirlar` Map'inde saklanır.
+  Sonraki güncellemelerde yalnızca hücrelerin textContent'i değişir. DOM
+  düğüm sayısı araç sayısıyla sınırlıdır (500 satır) ve asla büyümez.
+  Ayrıca textContent kullanmak, sunucudan gelen vehicleId'yi HTML olarak
+  yorumlamadığı için XSS riskini de kapatır.
+  ============================================================================
+-->
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Canlı Araç Takip Ekranı</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, Segoe UI, Arial, sans-serif; background: #121212; color: #fff; padding: 20px; margin: 0; }
+        h1 { color: #4CAF50; margin: 0 0 4px; font-size: 22px; }
+        .alt { color: #888; font-size: 13px; margin: 0 0 16px; }
+
+        /* Bağlantı rozetinin iki hali. Ekranın boş kalması durumunda sorunun
+           WebSocket'te mi başka yerde mi olduğu buradan anlaşılır. */
+        #durum { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; margin-bottom: 14px; }
+        .bagli { background: #10361f; color: #4CAF50; border: 1px solid #2f6b42; }
+        .kopuk { background: #3a1616; color: #ff6b6b; border: 1px solid #6b2f2f; }
+
+        #istatistik { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+        .kutu { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; padding: 10px 12px; }
+        .kutu .etiket { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+        /* tabular-nums: rakamlar eşit genişlikte olur, böylece hızla değişen
+           sayılar sağa sola zıplamaz ve okunabilir kalır. */
+        .kutu .deger { color: #00ffcc; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+        #tablo-sarmal { background: #1e1e1e; border: 1px solid #333; border-radius: 6px; height: 460px; overflow-y: auto; }
+        table { width: 100%; border-collapse: collapse; font-family: Consolas, monospace; font-size: 13px; }
+        /* Sticky başlık: 500 satır arasında kaydırırken sütun adları kaybolmasın. */
+        thead th { position: sticky; top: 0; background: #252525; color: #888; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #333; }
+        td { padding: 5px 12px; border-bottom: 1px solid #2c2c2c; color: #00ffcc; font-variant-numeric: tabular-nums; }
+        td.arac { color: #fff; font-weight: 600; }
+        /* Güncellenen satır bir an yeşil yanıp söner; hangi araçtan veri
+           geldiği gözle takip edilebilsin diye. */
+        tr.yeni td { background: #1b3326; transition: background .45s ease-out; }
+        #bos { padding: 20px; color: #888; }
+    </style>
+</head>
+<body>
+    <h1>🚌 Canlı Araç Telemetri Ekranı</h1>
+    <p class="alt">Sunucu açıkken <code>node simulate.js</code> çalıştırın; akış anında aşağıya düşer.</p>
+
+    <div id="durum" class="kopuk">● Bağlanılıyor...</div>
+
+    <!-- İstatistik kutuları: sunucudan gelen her pakete iliştirilen `stats`
+         alanından beslenir. "Redis" kutusu özellikle önemli — asıl hatayı
+         yaşadığımız senaryoda burası kırmızı yanardı ve sorun anında görülürdü. -->
+    <div id="istatistik">
+        <div class="kutu"><div class="etiket">İstek / sn</div><div class="deger" id="s-rps">0</div></div>
+        <div class="kutu"><div class="etiket">Aktif Araç</div><div class="deger" id="s-arac">0</div></div>
+        <div class="kutu"><div class="etiket">Toplam İstek</div><div class="deger" id="s-toplam">0</div></div>
+        <div class="kutu"><div class="etiket">Redis</div><div class="deger" id="s-redis" style="font-size:16px">-</div></div>
+    </div>
+
+    <div id="tablo-sarmal">
+        <div id="bos">Bağlantı bekleniyor...</div>
+        <table id="tablo" style="display:none">
+            <thead>
+                <tr><th>Araç</th><th>Enlem</th><th>Boylam</th><th>Hız (km/s)</th><th>Son Güncelleme</th></tr>
+            </thead>
+            <tbody id="govde"></tbody>
+        </table>
+    </div>
+
+    <script>
+        const durumEl = document.getElementById('durum');
+        const tabloEl = document.getElementById('tablo');
+        const govdeEl = document.getElementById('govde');
+        const bosEl = document.getElementById('bos');
+
+        // vehicleId -> { tr, hucreler }. Satır DOM'u bir kez kurulur, sonra
+        // yalnızca hücre metinleri değişir. Bu Map'in varlığı, ekranın
+        // saniyede yüzlerce güncellemede donmamasının tek sebebi.
+        const satirlar = new Map();
+
+        // Gelen paketler doğrudan ekrana yazılmaz; önce burada birikir.
+        // Map olduğu için aynı araç iki kez gelirse sadece sonuncusu kalır.
+        let bekleyen = new Map();
+        let istatistik = null;
+
+        function baglan() {
+            // Sayfa hangi adresten açıldıysa WS de oraya bağlanır. Adresi
+            // sabit yazmak yerine location'dan türetmek, 127.0.0.1 / makine
+            // adı / farklı port gibi durumlarda da çalışmasını sağlar.
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${location.host}`);
+
+            ws.onopen = () => {
+                durumEl.className = 'bagli';
+                durumEl.textContent = '● Bağlantı başarılı — veri bekleniyor';
+            };
+
+            ws.onmessage = (event) => {
+                const paket = JSON.parse(event.data);
+
+                // Sunucu iki tip paket yollar: 'snapshot' (bağlanır bağlanmaz
+                // tüm filo) ve 'batch' (son 200 ms'de değişenler). İkisi de
+                // `vehicles` dizisi taşıdığı için burada ayırmaya gerek yok.
+                if (paket.vehicles) {
+                    for (const v of paket.vehicles) bekleyen.set(v.vehicleId, v);
+                }
+                if (paket.stats) istatistik = paket.stats;
+            };
+
+            ws.onclose = () => {
+                durumEl.className = 'kopuk';
+                durumEl.textContent = '● Bağlantı koptu — yeniden deneniyor';
+                // Otomatik yeniden bağlanma: sunucuyu yeniden başlattığınızda
+                // sayfayı elle yenilemeniz gerekmez.
+                setTimeout(baglan, 1000);
+            };
+
+            // onerror'dan sonra onclose zaten tetiklenir; close() çağırmak
+            // yeniden bağlanma akışını tek bir yerde toplar.
+            ws.onerror = () => ws.close();
+        }
+
+        // Bir aracın satırını döndürür; yoksa bir kez oluşturur.
+        function satirAl(vehicleId) {
+            let satir = satirlar.get(vehicleId);
+            if (satir) return satir;
+
+            const tr = document.createElement('tr');
+            const hucreler = [];
+            for (let i = 0; i < 5; i++) {
+                const td = document.createElement('td');
+                // Araç adı hiç değişmeyeceği için yalnızca burada, bir kez yazılır.
+                if (i === 0) { td.className = 'arac'; td.textContent = vehicleId; }
+                tr.appendChild(td);
+                hucreler.push(td);
+            }
+            govdeEl.appendChild(tr);
+            satir = { tr, hucreler };
+            satirlar.set(vehicleId, satir);
+            return satir;
+        }
+
+        // Çizim döngüsü. setInterval yerine requestAnimationFrame:
+        // - Tarayıcının tazeleme hızıyla senkron çalışır (gereksiz reflow yok)
+        // - Sekme arka plandayken tarayıcı otomatik olarak durdurur, boşuna
+        //   CPU harcanmaz. setInterval bunu yapmaz.
+        function ciz() {
+            if (istatistik) {
+                document.getElementById('s-rps').textContent = istatistik.reqPerSec;
+                document.getElementById('s-arac').textContent = istatistik.activeVehicles;
+                document.getElementById('s-toplam').textContent = istatistik.totalRequests.toLocaleString('tr-TR');
+
+                // Redis 'ready' değilse kutu kırmızıya döner. Asıl hatanın
+                // teşhisi bu göstergeyle saniyeler sürerdi.
+                const redisEl = document.getElementById('s-redis');
+                redisEl.textContent = istatistik.redis === 'ready' ? 'Bağlı' : istatistik.redis;
+                redisEl.style.color = istatistik.redis === 'ready' ? '#00ffcc' : '#ff6b6b';
+            }
+
+            if (bekleyen.size > 0) {
+                // İlk veri gelince "Bağlantı bekleniyor..." yazısını tabloyla değiştir
+                if (tabloEl.style.display === 'none') {
+                    tabloEl.style.display = '';
+                    bosEl.style.display = 'none';
+                }
+
+                // Saat tek sefer hesaplanır; satır başına Date nesnesi kurmak
+                // 500 satırda gereksiz yük olurdu.
+                const saat = new Date().toLocaleTimeString('tr-TR');
+
+                for (const v of bekleyen.values()) {
+                    const { tr, hucreler } = satirAl(v.vehicleId);
+                    // innerHTML DEĞİL textContent: HTML parse edilmez, sadece
+                    // metin düğümü güncellenir. Hızlı ve güvenli.
+                    hucreler[1].textContent = Number(v.lat).toFixed(5);
+                    hucreler[2].textContent = Number(v.lon).toFixed(5);
+                    hucreler[3].textContent = Math.round(Number(v.speed));
+                    hucreler[4].textContent = saat;
+
+                    // Yanıp sönme animasyonunu yeniden tetiklemek için sınıfı
+                    // kaldırıp geri eklemek yetmez; tarayıcı iki değişikliği
+                    // tek karede birleştirir. offsetWidth okumak zorunlu bir
+                    // yeniden hesaplama (reflow) yaratıp animasyonu sıfırlar.
+                    tr.classList.remove('yeni');
+                    void tr.offsetWidth;
+                    tr.classList.add('yeni');
+                }
+                bekleyen.clear();
+            }
+
+            requestAnimationFrame(ciz);
+        }
+
+        baglan();
+        requestAnimationFrame(ciz);
+    </script>
+</body>
+</html>
